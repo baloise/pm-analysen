@@ -7,15 +7,20 @@
 
 # Initialisation ----------------------------------------------------------
 
-# I use to keep the CRAN repository "stable" and update libraries only several times a year
+# Keep the CRAN repository "stable" by a fixed date
+# (and update libraries only several times a year)
 options(repos = c(CRAN = "https://mran.revolutionanalytics.com/snapshot/2018-01-18"))
+
+# turn off scientific notation
+options(scipen = 999)
 
 # install library "pacman" if necessary
 # install.packages("pacman")
 
 # load some libraries
 library(pacman)
-p_load(dplyr, ggplot2, gridExtra, caret, reshape2, Metrics, plotmo) 
+p_load(dplyr, ggplot2, caret, pdp, gbm, tibble)
+# p_load(dplyr, ggplot2, gridExtra, caret, gbm, reshape2, Metrics, plotmo) 
 
 # source some additional functions
 source("00 Functions.R")
@@ -77,16 +82,32 @@ test <- df %>%
 
 
 
-# Summary of results (accuracy) -------------------------------------------
-#                             
-#                          untuned     tuned     Comment
-# 1.  mean ensemble         0.???      0.???     
-# 2.  XGBOOST               0.853      0.???     
-# 3.  GBM                   0.867      0.???     
-# 4.  randomforrest         0.855      0.867     
-# 5.  mars                  0.878      0.878     GLM
-# 7.  base line             0.830                Most frequent value as prediction
 
+# Explorative data analysis -----------------------------------------------
+
+featurePlot(x = train %>% select_if(is.numeric), y = train$Attrition, plot = "box", 
+            scales = list(y = list(relation = "free"), x = list(rot = 90)),
+            layout = c(3, 1), auto.key = list(columns = 3),  labels = c("Attrition", ""))
+
+featurePlot(x = train %>% select_if(is.factor) %>% data.matrix(), 
+            y = train$Attrition, plot = "box",
+            scales = list(y = list(relation = "free"), x = list(rot = 90)),
+            layout = c(3, 1), auto.key = list(columns = 3),  labels = c("Attrition", ""))
+
+
+
+
+# Summary of results ------------------------------------------------------
+#                             
+# Rg  Model                Accuracy     Comment
+# 1.  ensemble XGBOOST      0.876       
+# 1.  ensemble GLM          0.873       
+# 2.  XGBOOST               0.872       
+# 3.  GBM                   0.870       
+# 4.  mars                  0.868       
+# 5.  randomforrest         0.865       
+# 6.  naive bayes           0.842       
+# 7.  base line             0.830       Most frequent value as prediction
 
 
 
@@ -107,264 +128,278 @@ rm(bl)
 
 
 
-# mars --------------------------------------------------------------------
+# Naive Bayes -------------------------------------------------------------
 
-# load library
-p_load(earth)
+# train model (random search 20x)
+set.seed(12345)
+nb <- train(Attrition ~ ., data = train,
+            method = "naive_bayes", metric = "Accuracy",
+            trControl = trainControl(method = "cv", number = 5, search = "random"), 
+            tuneLength = 5)
+nb
 
-# train model
-# degree = 1, no interaction terms
-mars <- earth(Attrition~., data = train, glm = list(family = binomial), degree = 1, penalty = 2)
-mars
-
-# degree = 2, with 2-way interaction terms
-mars <- earth(Attrition~., data = train, glm = list(family = binomial), degree = 2, penalty = 3)
-mars
+print(paste0("Maximum Accuracy: ", round(max(nb$results$Accuracy), 4)))
+ggplot(nb, metric = "Accuracy")
 
 # show confusion matrix
-pr <- predict(mars, test %>% select(-Attrition))
-confusionMatrix(ifelse(pr > 0.5, 1, 0), test$Attrition)
-
-# show some model evaluation plots
-plot(mars, which = 1:4)
+pr <- predict(nb, test %>% select(-Attrition), type = "prob")
+confusionMatrix(ifelse(pr$Yes > 0.5, "Yes", "No"), test$Attrition)
 
 # variable importance
-ev <- evimp(mars, trim = T)
-print(ev)
-plot(ev)
-
-# show the influence of variables
-plotmo(mars)
-
-# plot the distribution of the predicted values for each class
-plotd(mars)
-
-# print model rules
-summary(mars, digits = 2, style = "pmax")
+VarImp <- varImp(nb)
+VarImp
+plot(VarImp, top = 20)
 
 # clean up
-rm(mars, pr, ev)
+rm(pr, VarImp)
+
+
+
+
+# Multiple additive regression splines ------------------------------------
+
+# train model (random search 20x)
+set.seed(12345)
+mars <- train(Attrition ~ ., data = train,
+            method = "earth", metric = "Accuracy",
+            trControl = trainControl(method = "cv", number = 5, search = "random"),
+            tuneLength = 20)
+mars
+print(paste0("Maximum Accuracy: ", round(max(mars$results$Accuracy), 4)))
+ggplot(mars$results, aes(x = nprune, y = Accuracy, colour = degree)) + 
+  geom_point()
+
+# show confusion matrix
+pr <- predict(mars, test %>% select(-Attrition), type = "prob")
+confusionMatrix(ifelse(pr$Yes > 0.5, "Yes", "No"), test$Attrition)
+
+# variable importance
+VarImp <- varImp(mars)
+VarImp
+plot(VarImp, top = 20)
+
+# model coefficients
+mars$finalModel$coefficients
+
+# model coefficients as plots
+plotmo(mars$finalModel)
+
+# clean up
+rm(pr, VarImp)
 
 
 
 
 # randomForest ------------------------------------------------------------
-
-# load library
-p_load(randomForest)
-
-# train model (mtry at default value = floor(sqrt(ncol(train))) = 5)
-rf <- randomForest(as.factor(Attrition)~., data = train, ntree = 5000, importance = T)
+# 
+# train model (random search 20x)
+set.seed(12345)
+rf <- train(Attrition ~ ., data = train,
+             method = "parRF", metric = "Accuracy",
+             trControl = trainControl(method = "cv", number = 5, search = "random"), 
+             tuneLength = 20, verbose = F)
 rf
-
-# train model with specific mtry
-rf <- randomForest(as.factor(Attrition)~., data = train, ntree = 5000, mtry = 13, importance = T)
-rf
+print(paste0("Maximum Accuracy: ", round(max(rf$results$Accuracy), 4)))
+ggplot(rf, metric = "Accuracy")
 
 # show confusion matrix
-pr <- predict(rf, test %>% select(-Attrition))
-confusionMatrix(pr, as.factor(test$Attrition))
+pr <- predict(rf, test %>% select(-Attrition), type = "prob")
+confusionMatrix(ifelse(pr$Yes > 0.5, "Yes", "No"), test$Attrition)
 
-# plot how error developes during training process
-plot(rf)
+# variable importance
+VarImp <- varImp(rf)
+VarImp
+plot(VarImp, top = 20)
 
-# plot importance of each variable
-varImpPlot(rf, sort = T, scale = T)
-
-# partial dependence plot
-plotmo(rf, nrug = "density", pmethod = "apartdep", ylim = NULL, degree2 = F)
-
-
-
-# Parametertuning: mtry (default = floor(sqrt(ncol(train))) = 5)
-tuneRF(train %>% select(-Attrition), as.factor(train$Attrition), 
-       ntreeTry = 5000, mtryStart = 10, stepFactor = 1.3, improve = 0.00001, 
-       trace = T, plot = T, doBest = F)
-
-# Parametertuning: mtry über eine Schleife optimieren
-Summary <- data.frame(mtry = c(2, 3, 4, 5, 6, 8, 10, 13, 16, 20, 25, 30), train = NA, test = NA)
-i <- 1
-for (mtry in Summary$mtry) {
-  print(paste(Sys.time(), "   mtry =", mtry))
-  rf <- randomForest(as.factor(Attrition)~., data = train, ntree = 5000, mtry = mtry)
-  Summary$mtry[i] <- mtry
-  Summary$train[i] <- round(accuracy(predict(rf, train %>% select(-Attrition)), train$Attrition), 5)
-  Summary$test[i] <- round(accuracy(predict(rf, test %>% select(-Attrition)), test$Attrition), 5)
-  print(Summary[i, ])
-  i <- i + 1
-  rm(rf)
+# Partial dependence plot
+for (i in 3:1) {
+  variable <- match(sort(VarImp$importance$Overall, T)[i], VarImp$importance$Overall)
+  variable <- names(train)[amatch(rownames(VarImp$importance)[variable], 
+                                  names(train), maxDist = 20)]
+  rf %>%
+    partial(pred.var = c(variable), chull = T) %>%
+    autoplot(contour = T, main = "Attrition", xlab = paste0(variable)) %>% 
+    print()
 }
-print(Sys.time())
-# show results
-Summary
-ggplot(melt(Summary, id = "mtry"), aes(x = mtry, y = value, colour = variable)) + 
-  geom_line()
-print(paste0("Maximum accuracy at mtry = ", Summary$mtry[which.max(Summary$test)]))
 
-
+# 2 way-Partial dependence plot
+for (i in 3:2) {
+  for (j in (i - 1):1) {
+    variable1 <- match(sort(VarImp$importance$Overall, T)[i], VarImp$importance$Overall)
+    variable1 <- names(train)[amatch(rownames(VarImp$importance)[variable1], 
+                                     names(train), maxDist = 15)]
+    variable2 <- match(sort(VarImp$importance$Overall, T)[j], VarImp$importance$Overall)
+    variable2 <- names(train)[amatch(rownames(VarImp$importance)[variable2], 
+                                     names(train), maxDist = 15)]
+    rf %>%
+      partial(pred.var = c(variable1, variable2), chull = T) %>%
+      autoplot(contour = T, 
+               main = paste0("Attrition: ", variable1, " vs. ", variable2)) %>% 
+      print()
+  }
+}
 
 # clean up
-rm(rf, Summary, mtry, i, pr)
+rm(VarImp, i, j, variable, variable1, variable2)
 
 
 
 
 # GBM ---------------------------------------------------------------------
 
-# load library
-p_load(gbm)
-
-# train model
-ntrees <- 500
-gbm <- gbm(Attrition~., data = train, distribution = "bernoulli",
-           n.trees = ntrees, shrinkage = 0.05, 
-           interaction.depth = 3,     # 1: additive model, 2: two-way interactions, etc.
-           n.minobsinnode = 10,
-           bag.fraction = 0.5,
-           cv.folds = 5)
+# train model (random search 20x)
+set.seed(12345)
+gbm <- train(Attrition ~ ., data = train,
+             method = "gbm", metric = "Accuracy",
+             trControl = trainControl(method = "cv", number = 5, search = "random"), 
+             tuneLength = 20, verbose = F)
 gbm
-
-# plot how error developes during training process
-best_ntrees <- gbm.perf(gbm, method = "cv")
+print(paste0("Maximum Accuracy: ", round(max(gbm$results$Accuracy), 4)))
+ggplot(gbm, metric = "Accuracy")
 
 # show confusion matrix
-pr <- predict(gbm, test %>% select(-Attrition), n.trees = best_ntrees)
-confusionMatrix(ifelse(pr > 0, 1, 0), as.factor(test$Attrition))
+pr <- predict(gbm, test %>% select(-Attrition), type = "prob")
+confusionMatrix(ifelse(pr$Yes > 0.5, "Yes", "No"), test$Attrition)
 
 # variable importance
-VarImp <- summary(gbm, n.trees = best_ntrees)
+VarImp <- varImp(gbm$finalModel, numTrees = gbm$bestTune$n.trees) %>% 
+  rownames_to_column("variable") %>% 
+  mutate(importance = Overall / max(Overall) * 100) %>% 
+  select(-Overall) %>% 
+  arrange(-importance)
 VarImp
+ggplot(VarImp %>% slice(1:20), 
+       aes(x = variable %>% reorder(importance), y = importance)) +
+  geom_bar(stat = "identity") + 
+  labs(y = "variable importance", x = "") +
+  coord_flip()
 
 # Partial dependence plot
-temp_names <- VarImp[1:4, ]
-temp_names <- as.character(temp_names$var[order(-temp_names$rel.inf)])
-par(mfrow = c(2, 2))
-for (i in 1:length(temp_names)) {
-  plot(gbm, i.var = temp_names[i], ntrees = best_ntrees, type = "link") 
-}
-par(mfrow = c(1, 1))
-
-# 2 way-interactions
-# calculate most important interactions
-zaehler <- 1
-tm <- names(train %>% select(-Attrition))
-ie <- data.frame(matrix(NA, nrow = length(tm) * (length(tm) - 1) / 2, ncol = 3))
-names(ie) <- c("Var1", "Var2", "H_Statistic")
-for (i in 1:(length(tm) - 1)) {
-  for (j in (i + 1):length(tm)) {
-    ie[zaehler, 1] <- tm[i]
-    ie[zaehler, 2] <- tm[j]
-    ie[zaehler, 3] <- round(interact.gbm(gbm, df, i.var = c(i, j), n.trees = best_ntrees), 5)
-    zaehler <- zaehler + 1
-  } 
-}
-ie <- ie %>% arrange(-H_Statistic)
-# plot most important interactions
-top <- 5
-ie_top <- ie[1:top, ]
-ie_top
-for (i in top:1) { 
-  plot(gbm, i.var = c(ie$Var1[i], ie$Var2[i]), n.trees = best_ntrees, return.grid = F)
+for (i in 3:1) {
+  variable <- names(train)[amatch(VarImp$variable[i], names(train), maxDist = 15)]
+  gbm %>%
+    partial(pred.var = c(variable), chull = T) %>%
+    autoplot(contour = T, main = "Attrition", xlab = paste0(variable)) %>% 
+    print()
 }
 
-# 3 way-interactions (slow!)
-# calculate most important interactions
-zaehler <- 1
-tm <- names(train %>% select(-Attrition))
-ie <- data.frame(matrix(NA, nrow = length(tm) * (length(tm) - 1) * (length(tm) - 2) / 6, ncol = 4))
-names(ie) <- c("Var1", "Var2", "Var3", "H_Statistic")
-for (i in 1:(length(tm) - 2)) {
-  for (j in (i + 1):(length(tm) - 1)) {
-    for (k in (j + 1):length(tm)) {
-      ie[zaehler, 1] <- tm[i]
-      ie[zaehler, 2] <- tm[j]
-      ie[zaehler, 3] <- tm[k]
-      ie[zaehler,4] <- round(interact.gbm(gbm, df, i.var = c(i, j, k), n.trees = best_ntrees), 8)
-      zaehler <- zaehler + 1
-    } 
-  }
-}
-ie <- ie %>% arrange(-H_Statistic)
-# plot most important interactions
-top <- 5
-ie_top <- ie[1:top, ]
-ie_top
-for (i in top:1) {
-  plot(gbm, i.var = c(ie$Var1[i], ie$Var2[i], ie$Var3[i]), n.trees = best_ntrees, return.grid = F)
-}
-
-
+# # 2 way-Partial dependence plot (slow!)
+# for (i in 3:2) {
+#   for (j in (i - 1):1) {
+#     variable1 <- names(train)[amatch(VarImp$variable[i], names(train), maxDist = 15)]
+#     variable2 <- names(train)[amatch(VarImp$variable[j], names(train), maxDist = 15)]
+#     gbm %>%
+#       partial(pred.var = c(variable1, variable2), chull = T) %>%
+#       autoplot(contour = T, main = "Attrition", xlab = paste0(variable1, " vs ", variable2)) %>% 
+#       print()
+#   }
+# }
 
 # clean up
-rm(gbm, ie, ie_top, top, VarImp, best_ntrees, ntrees, i, j, k, pr, temp_names, 
-   temp_names2, tm, zaehler)
+rm(pr, VarImp, i, j, variable, variable1, variable2)
 
 
 
 
 # XGBOOST -----------------------------------------------------------------
 
-
-xgb <- train(x = data.matrix(train %>% select(-Attrition)),
-             y = train$Attrition, 
+# train model (random search 20x)
+set.seed(12345)
+xgb <- train(Attrition ~ ., data = train,
              method = "xgbTree", metric = "Accuracy",
-             trControl = trainControl(method = "cv", number = 5), tuneLength = 10)
-
-pdp.lstat <- partial(xgb, pred.var = "Age", plot = T, rug = T)
-
-
-# prepare data
-train_y <- train$Attrition
-train_mat <- sparse.model.matrix(~., data = train %>% select(-Attrition))
-train_d <- xgb.DMatrix(data = train_mat, label = train_y)
-test_y <- test$Attrition
-test_mat <- sparse.model.matrix(~., data = test %>% select(-Attrition))
-test_d <- xgb.DMatrix(data = test_mat, label = test_y)
-
-# train model
-xgb <- xgb.cv(data = train_d, 
-              objective = "binary:logistic", eval_metric = "error", nfold = 5,
-              nrounds = 1000, eta = 0.05,
-              max_depth = 6, min_child_weight = 1, gamma = 0,
-              subsample = 1, colsample_bytree = 1,
-              early_stopping_rounds = 30)
-
-# plot how error developes during training process
-ggplot(melt(xgb$evaluation_log %>% select(-train_error_std, -test_error_std), id = "iter"),
-       aes(x = iter, y = value, colour = variable)) +
-  geom_line(size = I(1))
-
-# re-run model with nrounds = best_nrounds from cv
-xgb <- xgb.train(data = train_d, 
-                 objective = "binary:logistic", eval_metric = "error",
-                 nrounds = 57, eta = 0.05,
-                 max_depth = 6, min_child_weight = 1, gamma = 0,
-                 subsample = 1, colsample_bytree = 1)
+             trControl = trainControl(method = "cv", number = 5, search = "random"), 
+             tuneLength = 20)
+xgb
+print(paste0("Maximum Accuracy: ", round(max(xgb$results$Accuracy), 4)))
+ggplot(xgb, metric = "Accuracy")
 
 # show confusion matrix
-pr <- predict(xgb, test_d)
-confusionMatrix(ifelse(pr > 0.5, 1, 0), test$Attrition)
+pr <- predict(xgb, test %>% select(-Attrition), type = "prob")
+confusionMatrix(ifelse(pr$Yes > 0.5, "Yes", "No"), test$Attrition)
 
 # variable importance
-xgb.importance(colnames(train_mat), xgb)
-xgb.plot.importance(xgb.importance(colnames(train_mat), xgb), rel_to_first = T, xlab = "Relative importance")
+VarImp <- varImp(xgb)
+VarImp
+plot(VarImp, top = 20)
 
+# Partial dependence plot
+for (i in 3:1) {
+  variable <- match(sort(VarImp$importance$Overall, T)[i], VarImp$importance$Overall)
+  variable <- names(train)[amatch(rownames(VarImp$importance)[variable], 
+                                  names(train), maxDist = 20)]
+  xgb %>%
+    partial(pred.var = c(variable), chull = T) %>%
+    autoplot(contour = T, main = "Attrition", xlab = paste0(variable)) %>% 
+    print()
+}
 
-
-
-p_load(pdp)
-
-pdp.lstat <- partial(xgb, pred.var = "Age", plot = T, rug = T)
-
-xgb %>%
-  partial(pred.var = "Age") %>%
-  autoplot(rug = T, train = train_mat)
-
-
-
-
-
+# 2 way-Partial dependence plot
+for (i in 3:2) {
+  for (j in (i - 1):1) {
+    variable1 <- match(sort(VarImp$importance$Overall, T)[i], VarImp$importance$Overall)
+    variable1 <- names(train)[amatch(rownames(VarImp$importance)[variable1], 
+                                     names(train), maxDist = 15)]
+    variable2 <- match(sort(VarImp$importance$Overall, T)[j], VarImp$importance$Overall)
+    variable2 <- names(train)[amatch(rownames(VarImp$importance)[variable2], 
+                                     names(train), maxDist = 15)]
+    xgb %>%
+      partial(pred.var = c(variable1, variable2), chull = T) %>%
+      autoplot(contour = T, 
+               main = paste0("Attrition: ", variable1, " vs. ", variable2)) %>% 
+      print()
+  }
+}
 
 # clean up
-rm(train_y, train_mat, train_d, test_y, test_mat, test_d, xgb, pr)
+rm(pr, i, j, variable, variable1, variable2, VarImp)
+
+
+
+
+# Caret Ensemble ----------------------------------------------------------
+
+# load library
+p_load(caretEnsemble)
+
+# train some models (with tuning random search 10x)
+set.seed(12345)
+models <- caretList(Attrition ~ ., data = train,
+                    metric = "Accuracy",
+                    trControl = trainControl(method = "cv", number = 5, 
+                                             search = "random", 
+                                             savePredictions = "final",
+                                             classProbs = T), 
+                    tuneLength = 20,
+                    methodList = c("naive_bayes", "earth", "parRF", "gbm", "xgbTree"))
+# models
+
+# show correlation between models
+resamps <- resamples(list(nb = models$naive_bayes,
+                          mars = models$earth,
+                          rf = models$parRF,
+                          gbm = models$gbm,
+                          xgb = models$xgbTree))
+cor(resamps$values %>% select(contains("Accuracy")))
+
+# ensemble with GLM
+set.seed(12345)
+ensemble <- caretEnsemble(models, 
+                          metric = "Accuracy",
+                          trControl = trainControl(method = "cv", number = 5, 
+                                                   classProbs = T))
+ensemble
+ensemble$ens_model$finalModel$coefficients
+
+# ensemble with xgbTree
+set.seed(12345)
+ensemble_stacked <- caretStack(models,
+                               method = "xgbTree",
+                               metric = "Accuracy",
+                               trControl = trainControl(method = "cv", number = 5, 
+                                                        search = "random", 
+                                                        savePredictions = "final",
+                                                        classProbs = T),
+                               tuneLength = 20)
+ensemble_stacked
+print(paste0("Maximum Accuracy: ", round(max(ensemble_stacked$ens_model$results$Accuracy), 4)))
 
