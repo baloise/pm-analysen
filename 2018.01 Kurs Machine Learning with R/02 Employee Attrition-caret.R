@@ -40,7 +40,7 @@ summary(df)
 ### Prepare data
 
 # Change Attrition to 0/1
-df$Attrition <- ifelse(df$Attrition == "No", 0, 1)
+# df$Attrition <- ifelse(df$Attrition == "No", 0, 1)
 
 # Remove columns with only 1 value
 df <- remove_columns_with_only_one_value(df)
@@ -304,8 +304,14 @@ rm(gbm, ie, ie_top, top, VarImp, best_ntrees, ntrees, i, j, k, pr, temp_names,
 
 # XGBOOST -----------------------------------------------------------------
 
-# load library
-p_load(xgboost, Matrix, pdp)
+
+xgb <- train(x = data.matrix(train %>% select(-Attrition)),
+             y = train$Attrition, 
+             method = "xgbTree", metric = "Accuracy",
+             trControl = trainControl(method = "cv", number = 5), tuneLength = 10)
+
+pdp.lstat <- partial(xgb, pred.var = "Age", plot = T, rug = T)
+
 
 # prepare data
 train_y <- train$Attrition
@@ -340,24 +346,25 @@ pr <- predict(xgb, test_d)
 confusionMatrix(ifelse(pr > 0.5, 1, 0), test$Attrition)
 
 # variable importance
-VarImp <- xgb.importance(colnames(train_mat), xgb)
-VarImp
-xgb.plot.importance(VarImp, rel_to_first = T, xlab = "Relative importance")
+xgb.importance(colnames(train_mat), xgb)
+xgb.plot.importance(xgb.importance(colnames(train_mat), xgb), rel_to_first = T, xlab = "Relative importance")
 
-# Partial dependence plot
-for (i in 3:1) {
-  print(partial(xgb, pred.var = VarImp$Feature[i], plot = T, rug = T, train = train_mat))
-}
 
-# 2 way-Partial dependence plot
-for (i in 3:2) {
-  for (j in (i - 1):1) {
-    print(partial(xgb, pred.var = c(VarImp$Feature[i], VarImp$Feature[j]), 
-                  plot = T, rug = T, train = train_mat))
-  }
-}
+
+
+p_load(pdp)
+
+pdp.lstat <- partial(xgb, pred.var = "Age", plot = T, rug = T)
+
+xgb %>%
+  partial(pred.var = "Age") %>%
+  autoplot(rug = T, train = train_mat)
+
+
+
 
 
 
 # clean up
-rm(train_y, train_mat, train_d, test_y, test_mat, test_d, xgb, pr, VarImp, i, j)
+rm(train_y, train_mat, train_d, test_y, test_mat, test_d, xgb, pr)
+
