@@ -100,14 +100,14 @@ featurePlot(x = train %>% select_if(is.factor) %>% data.matrix(),
 # Summary of results ------------------------------------------------------
 #                             
 # Rg  Model                Accuracy     Comment
-# 1.  ensemble XGBOOST      0.876       
-# 1.  ensemble GLM          0.873       
+# 1.  ensemble XGBOOST      0.872       
 # 2.  XGBOOST               0.872       
 # 3.  GBM                   0.870       
 # 4.  mars                  0.868       
-# 5.  randomforrest         0.865       
-# 6.  naive bayes           0.842       
-# 7.  base line             0.830       Most frequent value as prediction
+# 5.  ensemble GLM          0.867       
+# 6.  randomforrest         0.865       
+# 7.  naive bayes           0.842       
+# 8.  base line             0.830       Most frequent value as prediction
 
 
 

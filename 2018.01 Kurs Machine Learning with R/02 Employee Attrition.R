@@ -10,6 +10,9 @@
 # I use to keep the CRAN repository "stable" and update libraries only several times a year
 options(repos = c(CRAN = "https://mran.revolutionanalytics.com/snapshot/2018-01-18"))
 
+# turn off scientific notation
+options(scipen = 999)
+
 # install library "pacman" if necessary
 # install.packages("pacman")
 
