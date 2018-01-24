@@ -1,6 +1,30 @@
 # Source of data ---------------------------------------------------------
 # 
-# https://www.kaggle.com/pavansubhasht/ibm-hr-analytics-attrition-dataset
+# https://www.kaggle.com/c/bike-sharing-demand/data
+# 
+# Data Fields:
+# 
+# datetime: date and hour  
+# season: 
+#   1: spring
+#   2: summer
+#   3: fall
+#   4: winter 
+# holiday: whether the day is considered a holiday
+# workingday: whether the day is neither a weekend nor holiday
+# weather
+#   1: Clear, Few clouds, Partly cloudy, Partly cloudy 
+#   2: Mist + Cloudy, Mist + Broken clouds, Mist + Few clouds, Mist 
+#   3: Light Snow, Light Rain + Thunderstorm + Scattered clouds, Light Rain + 
+#      Scattered clouds 
+#   4: Heavy Rain + Ice Pallets + Thunderstorm + Mist, Snow + Fog 
+# temp: temperature in Celsius
+# atemp: "feels like" temperature in Celsius
+# humidity: relative humidity
+# windspeed: wind speed
+# casual: number of non-registered user rentals initiated
+# registered: number of registered user rentals initiated
+# count: number of total rentals
 
 
 
@@ -18,7 +42,7 @@ options(scipen = 999)
 # install library "pacman" if necessary
 # install.packages("pacman")
 library(pacman)
-p_load(dplyr, ggplot2, caret, pdp, gbm, tibble)
+p_load(dplyr, ggplot2, caret, pdp, gbm, tibble, lubridate)
 
 # source some additional functions
 source("00 Functions.R")
@@ -29,43 +53,48 @@ source("00 Functions.R")
 # Read and prepare data ---------------------------------------------------
 
 # read data
-df <- read.csv("02 Employee Attrition - data.csv")
-# df <- read.csv("02 Employee Attrition - data.csv") %>% 
-#   slice(1:1000)
+# df <- read.csv("03 Bike Sharing Demand - data.csv")
+df_raw <- read.csv("03 Bike Sharing Demand - data.csv") %>% 
+  slice(1:1000)
 
 # check classes of variables
-str(df)
+str(df_raw)
 
 # check summaries of data
-summary(df)
-
+summary(df_raw)
 
 
 
 ### Prepare data
 
-# Change Attrition to 0/1
-# df$Attrition <- ifelse(df$Attrition == "No", 0, 1)
+data_preparation <- function(df) {
+  # Change datetime format
+  df$datetime <- as.POSIXct(df$datetime)
+  # extract date
+  df$date <- as.Date(df$datetime)
+  # extract time
+  df$time <- hour(df$datetime)
+  # some more feature engineering
+  # ...
+  # remove some unnecesary variables
+  df <- df %>% select(-datetime, -casual, -registered)
+  # Remove columns with only 1 value
+  df <- remove_columns_with_only_one_value(df)
+}
 
-# Remove columns with only 1 value
-df <- remove_columns_with_only_one_value(df)
-
-
-
-### Feature engineering
-# ...
+df <- data_preparation(df_raw)
 
 
 
 ### Generate train and test data
 
 # generate a new column and mark some 30% of data as test-data
-set.seed(123456)
+set.seed(12345)
 df <- df %>% 
   mutate(test_data = sample(c(0, 1), 
                             nrow(df), 
                             replace = T, 
-                            prob = c(0.7, 0.3)))
+                            prob = c(0.8, 0.2)))
 # count number of 0/1 of df$test
 table(df$test_data)
 
@@ -85,14 +114,17 @@ test <- df %>%
 
 # Explorative data analysis -----------------------------------------------
 
-featurePlot(x = train %>% select_if(is.numeric), y = train$Attrition, plot = "box", 
+featurePlot(x = train %>% select_if(is.numeric) %>% select(-count), y = train$count, 
+            plot = "scatter", type = c("p", "smooth"), span = .5)
+
+
             scales = list(y = list(relation = "free"), x = list(rot = 90)),
-            layout = c(3, 1), auto.key = list(columns = 3),  labels = c("Attrition", ""))
+            layout = c(3, 1), auto.key = list(columns = 3),  labels = c("count", ""))
 
 featurePlot(x = train %>% select_if(is.factor) %>% data.matrix(), 
-            y = train$Attrition, plot = "box",
+            y = train$count, plot = "box",
             scales = list(y = list(relation = "free"), x = list(rot = 90)),
-            layout = c(3, 1), auto.key = list(columns = 3),  labels = c("Attrition", ""))
+            layout = c(3, 1), auto.key = list(columns = 3),  labels = c("count", ""))
 
 
 
@@ -116,8 +148,8 @@ featurePlot(x = train %>% select_if(is.factor) %>% data.matrix(),
 # choose most frequent value as prediction
 
 # "train model"
-bl <- data.frame(obs = test$Attrition,
-                 pr = as.numeric(names(sort(table(train$Attrition), decreasing = T)[1])))
+bl <- data.frame(obs = test$count,
+                 pr = as.numeric(names(sort(table(train$count), decreasing = T)[1])))
 
 # show confusion matrix
 confusionMatrix(bl$pr, bl$obs)
@@ -132,7 +164,7 @@ rm(bl)
 
 # train model (random search 20x)
 set.seed(12345)
-nb <- train(Attrition ~ ., data = train,
+nb <- train(count ~ ., data = train,
             method = "naive_bayes", metric = "Accuracy",
             trControl = trainControl(method = "cv", number = 5, search = "random"), 
             tuneLength = 5)
@@ -142,8 +174,8 @@ print(paste0("Maximum Accuracy: ", round(max(nb$results$Accuracy), 4)))
 ggplot(nb, metric = "Accuracy")
 
 # show confusion matrix
-pr <- predict(nb, test %>% select(-Attrition), type = "prob")
-confusionMatrix(ifelse(pr$Yes > 0.5, "Yes", "No"), test$Attrition)
+pr <- predict(nb, test %>% select(-count), type = "prob")
+confusionMatrix(ifelse(pr$Yes > 0.5, "Yes", "No"), test$count)
 
 # variable importance
 VarImp <- varImp(nb)
@@ -160,7 +192,7 @@ rm(pr, VarImp)
 
 # train model (random search 20x)
 set.seed(12345)
-mars <- train(Attrition ~ ., data = train,
+mars <- train(count ~ ., data = train,
             method = "earth", metric = "Accuracy",
             trControl = trainControl(method = "cv", number = 5, search = "random"),
             tuneLength = 20)
@@ -170,8 +202,8 @@ ggplot(mars$results, aes(x = nprune, y = Accuracy, colour = degree)) +
   geom_point()
 
 # show confusion matrix
-pr <- predict(mars, test %>% select(-Attrition), type = "prob")
-confusionMatrix(ifelse(pr$Yes > 0.5, "Yes", "No"), test$Attrition)
+pr <- predict(mars, test %>% select(-count), type = "prob")
+confusionMatrix(ifelse(pr$Yes > 0.5, "Yes", "No"), test$count)
 
 # variable importance
 VarImp <- varImp(mars)
@@ -194,7 +226,7 @@ rm(pr, VarImp)
 # 
 # train model (random search 20x)
 set.seed(12345)
-rf <- train(Attrition ~ ., data = train,
+rf <- train(count ~ ., data = train,
              method = "parRF", metric = "Accuracy",
              trControl = trainControl(method = "cv", number = 5, search = "random"), 
              tuneLength = 20, verbose = F)
@@ -203,8 +235,8 @@ print(paste0("Maximum Accuracy: ", round(max(rf$results$Accuracy), 4)))
 ggplot(rf, metric = "Accuracy")
 
 # show confusion matrix
-pr <- predict(rf, test %>% select(-Attrition), type = "prob")
-confusionMatrix(ifelse(pr$Yes > 0.5, "Yes", "No"), test$Attrition)
+pr <- predict(rf, test %>% select(-count), type = "prob")
+confusionMatrix(ifelse(pr$Yes > 0.5, "Yes", "No"), test$count)
 
 # variable importance
 VarImp <- varImp(rf)
@@ -218,7 +250,7 @@ for (i in 3:1) {
                                   names(train), maxDist = 20)]
   rf %>%
     partial(pred.var = c(variable), chull = T) %>%
-    autoplot(contour = T, main = "Attrition", xlab = paste0(variable)) %>% 
+    autoplot(contour = T, main = "count", xlab = paste0(variable)) %>% 
     print()
 }
 
@@ -234,7 +266,7 @@ for (i in 3:2) {
     rf %>%
       partial(pred.var = c(variable1, variable2), chull = T) %>%
       autoplot(contour = T, 
-               main = paste0("Attrition: ", variable1, " vs. ", variable2)) %>% 
+               main = paste0("count: ", variable1, " vs. ", variable2)) %>% 
       print()
   }
 }
@@ -249,7 +281,7 @@ rm(VarImp, i, j, variable, variable1, variable2)
 
 # train model (random search 20x)
 set.seed(12345)
-gbm <- train(Attrition ~ ., data = train,
+gbm <- train(count ~ ., data = train,
              method = "gbm", metric = "Accuracy",
              trControl = trainControl(method = "cv", number = 5, search = "random"), 
              tuneLength = 20, verbose = F)
@@ -258,8 +290,8 @@ print(paste0("Maximum Accuracy: ", round(max(gbm$results$Accuracy), 4)))
 ggplot(gbm, metric = "Accuracy")
 
 # show confusion matrix
-pr <- predict(gbm, test %>% select(-Attrition), type = "prob")
-confusionMatrix(ifelse(pr$Yes > 0.5, "Yes", "No"), test$Attrition)
+pr <- predict(gbm, test %>% select(-count), type = "prob")
+confusionMatrix(ifelse(pr$Yes > 0.5, "Yes", "No"), test$count)
 
 # variable importance
 VarImp <- varImp(gbm$finalModel, numTrees = gbm$bestTune$n.trees) %>% 
@@ -279,7 +311,7 @@ for (i in 3:1) {
   variable <- names(train)[amatch(VarImp$variable[i], names(train), maxDist = 15)]
   gbm %>%
     partial(pred.var = c(variable), chull = T) %>%
-    autoplot(contour = T, main = "Attrition", xlab = paste0(variable)) %>% 
+    autoplot(contour = T, main = "count", xlab = paste0(variable)) %>% 
     print()
 }
 
@@ -290,7 +322,7 @@ for (i in 3:1) {
 #     variable2 <- names(train)[amatch(VarImp$variable[j], names(train), maxDist = 15)]
 #     gbm %>%
 #       partial(pred.var = c(variable1, variable2), chull = T) %>%
-#       autoplot(contour = T, main = "Attrition", xlab = paste0(variable1, " vs ", variable2)) %>% 
+#       autoplot(contour = T, main = "count", xlab = paste0(variable1, " vs ", variable2)) %>% 
 #       print()
 #   }
 # }
@@ -305,7 +337,7 @@ rm(pr, VarImp, i, j, variable, variable1, variable2)
 
 # train model (random search 20x)
 set.seed(12345)
-xgb <- train(Attrition ~ ., data = train,
+xgb <- train(count ~ ., data = train,
              method = "xgbTree", metric = "Accuracy",
              trControl = trainControl(method = "cv", number = 5, search = "random"), 
              tuneLength = 20)
@@ -314,8 +346,8 @@ print(paste0("Maximum Accuracy: ", round(max(xgb$results$Accuracy), 4)))
 ggplot(xgb, metric = "Accuracy")
 
 # show confusion matrix
-pr <- predict(xgb, test %>% select(-Attrition), type = "prob")
-confusionMatrix(ifelse(pr$Yes > 0.5, "Yes", "No"), test$Attrition)
+pr <- predict(xgb, test %>% select(-count), type = "prob")
+confusionMatrix(ifelse(pr$Yes > 0.5, "Yes", "No"), test$count)
 
 # variable importance
 VarImp <- varImp(xgb)
@@ -329,7 +361,7 @@ for (i in 3:1) {
                                   names(train), maxDist = 20)]
   xgb %>%
     partial(pred.var = c(variable), chull = T) %>%
-    autoplot(contour = T, main = "Attrition", xlab = paste0(variable)) %>% 
+    autoplot(contour = T, main = "count", xlab = paste0(variable)) %>% 
     print()
 }
 
@@ -345,7 +377,7 @@ for (i in 3:2) {
     xgb %>%
       partial(pred.var = c(variable1, variable2), chull = T) %>%
       autoplot(contour = T, 
-               main = paste0("Attrition: ", variable1, " vs. ", variable2)) %>% 
+               main = paste0("count: ", variable1, " vs. ", variable2)) %>% 
       print()
   }
 }
@@ -363,7 +395,7 @@ p_load(caretEnsemble)
 
 # train some models (with tuning random search 10x)
 set.seed(12345)
-models <- caretList(Attrition ~ ., data = train,
+models <- caretList(count ~ ., data = train,
                     metric = "Accuracy",
                     trControl = trainControl(method = "cv", number = 5, 
                                              search = "random", 
