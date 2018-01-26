@@ -67,6 +67,7 @@ df_status(df_raw)
 
 ### Prepare data
 
+
 data_preparation <- function(df, is_train = T) {
   # Change class of datetime
   df$datetime <- as.POSIXct(df$datetime)
