@@ -85,10 +85,31 @@ test <- df %>%
 
 # Explorative data analysis -----------------------------------------------
 
+# numerical variables: plotting distributions and calculate several statistics
+plot_num(train)
+profiling_num(train)
+
+# categoric variables: plotting frequencies
+freq(train)
+
+
+
+### plot x vs. y
+
+# adapt theme
+theme1 <- trellis.par.get()
+theme1$plot.symbol$col = rgb(.2, .2, .2, .4)
+theme1$plot.symbol$pch = 16
+theme1$plot.line$col = rgb(1, 0, 0, .7)
+theme1$plot.line$lwd <- 2
+trellis.par.set(theme1)
+
+# numeric variables vs. y
 featurePlot(x = train %>% select_if(is.numeric), y = train$Attrition, plot = "box", 
             scales = list(y = list(relation = "free"), x = list(rot = 90)),
             layout = c(3, 1), auto.key = list(columns = 3),  labels = c("Attrition", ""))
 
+# categoric variables vs. y
 featurePlot(x = train %>% select_if(is.factor) %>% data.matrix(), 
             y = train$Attrition, plot = "box",
             scales = list(y = list(relation = "free"), x = list(rot = 90)),

@@ -42,7 +42,7 @@ options(scipen = 999)
 # install library "pacman" if necessary
 # install.packages("pacman")
 library(pacman)
-p_load(dplyr, ggplot2, caret, pdp, gbm, tibble, lubridate)
+p_load(funModeling, dplyr, ggplot2, caret, pdp, gbm, tibble, lubridate)
 
 # source some additional functions
 source("00 Functions.R")
@@ -52,37 +52,72 @@ source("00 Functions.R")
 
 # Read and prepare data ---------------------------------------------------
 
-# read data
-# df <- read.csv("03 Bike Sharing Demand - data.csv")
-df_raw <- read.csv("03 Bike Sharing Demand - data.csv") %>% 
-  slice(1:1000)
+### read data
+df_raw <- read.csv("03 Bike Sharing Demand - data.csv")
+# df_raw <- read.csv("03 Bike Sharing Demand - data.csv") %>% 
+#   slice(1:1000)
+#   sample_n(1000)
 
-# check classes of variables
-str(df_raw)
 
-# check summaries of data
-summary(df_raw)
+
+### check dataset health status
+df_status(df_raw)
 
 
 
 ### Prepare data
 
-data_preparation <- function(df) {
-  # Change datetime format
+data_preparation <- function(df, is_train = T) {
+  # Change class of datetime
   df$datetime <- as.POSIXct(df$datetime)
   # extract date
   df$date <- as.Date(df$datetime)
   # extract time
   df$time <- hour(df$datetime)
+  # change class of season, holiday, workingday, weather
+  if (is_train) {
+    df <- df %>%
+      mutate_at(vars(season, holiday, workingday, weather), factor)
+  } else {
+    df$season <- factor(df$season, levels = levels(train$season))
+    df$holiday <- factor(df$holiday, levels = levels(train$holiday))
+    df$workingday <- factor(df$workingday, levels = levels(train$workingday))
+    df$weather <- factor(df$weather, levels = levels(train$weather))
+  }
   # some more feature engineering
   # ...
-  # remove some unnecesary variables
+  # 
+  # # Ausreisser trimmen
+  # # ...
+  # # 
+  # # Clean variables with too many categories
+  # # ...
+  # # 
+  # # Zahlen-Missings durch MEDIAN ersetzen
+  # for (i in which(sapply(train, is.numeric))) {
+  #   train[is.na(train[, i]), i] <- median(train[, i], na.rm=T)
+  # }
+  # # 
+  # # Faktor-Missings durch MODUS ersetzen
+  # for (i in which(sapply(train, is.factor))) {
+  #   train[is.na(train[, i]), i] <- names(sort(-table(train[, i])))[1]
+  # }
+  # # 
+  # # extract day of the week
+  # df$weekday <- as.factor(weekdays(df$datetime, abbreviate = F))
+  # df$weekday <- factor(df$weekday, 
+  #                      levels = c("Montag", "Dienstag", "Mittwoch", "Donnerstag", 
+  #                                 "Freitag", "Samstag", "Sonntag"))
+  # # 
+  # # extract year from date and convert to factor to represent yearly growth
+  # df$year <- as.integer(substr(df$datetime, 1, 4))
+  # df$year <- as.factor(df$year)
+  # 
+  # remove unnecesary variables
   df <- df %>% select(-datetime, -casual, -registered)
   # Remove columns with only 1 value
   df <- remove_columns_with_only_one_value(df)
 }
-
-df <- data_preparation(df_raw)
 
 
 
@@ -90,100 +125,83 @@ df <- data_preparation(df_raw)
 
 # generate a new column and mark some 30% of data as test-data
 set.seed(12345)
-df <- df %>% 
+df_raw <- df_raw %>% 
   mutate(test_data = sample(c(0, 1), 
-                            nrow(df), 
+                            nrow(df_raw), 
                             replace = T, 
                             prob = c(0.8, 0.2)))
-# count number of 0/1 of df$test
-table(df$test_data)
+# count number of 0/1 of df_raw$test
+table(df_raw$test_data)
 
 # select train-data: data to train the models on
-train <- df %>% 
+train <- df_raw %>% 
   filter(test_data == 0) %>% 
   select(-test_data)
+train <- data_preparation(train, is_train = T)
 
 # select test-data: on this data we evaluate model performance
-test <- df %>% 
+test <- df_raw %>% 
   filter(test_data == 1) %>% 
   select(-test_data)
-
+test <- data_preparation(test, is_train = F)
 
 
 
 
 # Explorative data analysis -----------------------------------------------
 
+# numerical variables: plotting distributions and calculate several statistics
+plot_num(train)
+profiling_num(train)
+
+# categoric variables: plotting frequencies
+freq(train)
+
+
+
+### plot x vs. y
+
+# adapt theme
+theme1 <- trellis.par.get()
+theme1$plot.symbol$col = rgb(.2, .2, .2, .4)
+theme1$plot.symbol$pch = 16
+theme1$plot.line$col = rgb(1, 0, 0, .7)
+theme1$plot.line$lwd <- 2
+trellis.par.set(theme1)
+
+# numeric variables vs. y
 featurePlot(x = train %>% select_if(is.numeric) %>% select(-count), y = train$count, 
-            plot = "scatter", type = c("p", "smooth"), span = .5)
+            plot = "scatter", type = c("p", "smooth"), span = 0.5,
+            layout = c(3, 1), auto.key = list(columns = 3),  labels = c("", "count"))
 
-
-            scales = list(y = list(relation = "free"), x = list(rot = 90)),
-            layout = c(3, 1), auto.key = list(columns = 3),  labels = c("count", ""))
-
-featurePlot(x = train %>% select_if(is.factor) %>% data.matrix(), 
-            y = train$count, plot = "box",
-            scales = list(y = list(relation = "free"), x = list(rot = 90)),
-            layout = c(3, 1), auto.key = list(columns = 3),  labels = c("count", ""))
+# categoric variables vs. y
+featurePlot(x = train %>% select_if(is.factor) %>% data.matrix(),
+            y = train$count,
+            plot = "scatter", type = c("p", "smooth"), span = 0.5,
+            layout = c(3, 1), auto.key = list(columns = 3),  labels = c("", "count"))
 
 
 
 
 # Summary of results ------------------------------------------------------
 #                             
-# Rg  Model                Accuracy     Comment
-# 1.  ensemble XGBOOST      0.872       
-# 2.  XGBOOST               0.872       
-# 3.  GBM                   0.870       
-# 4.  mars                  0.868       
-# 5.  ensemble GLM          0.867       
-# 6.  randomforrest         0.865       
-# 7.  naive bayes           0.842       
-# 8.  base line             0.830       Most frequent value as prediction
+# Rg  Model                  RMSE     Comment
+# 1.  ensemble XGBOOST      ???       
+# 2.  XGBOOST               ???       
+# 3.  GBM                   ???       
+# 4.  mars                  ???       
+# 5.  ensemble GLM          ???       
+# 6.  randomforrest         ???       
+# 8.  base line             183.0     average value as prediction
 
 
 
 
 # base line ---------------------------------------------------------------
-# choose most frequent value as prediction
+# average value as prediction
 
-# "train model"
-bl <- data.frame(obs = test$count,
-                 pr = as.numeric(names(sort(table(train$count), decreasing = T)[1])))
-
-# show confusion matrix
-confusionMatrix(bl$pr, bl$obs)
-
-# clean up
-rm(bl)
-
-
-
-
-# Naive Bayes -------------------------------------------------------------
-
-# train model (random search 20x)
-set.seed(12345)
-nb <- train(count ~ ., data = train,
-            method = "naive_bayes", metric = "Accuracy",
-            trControl = trainControl(method = "cv", number = 5, search = "random"), 
-            tuneLength = 5)
-nb
-
-print(paste0("Maximum Accuracy: ", round(max(nb$results$Accuracy), 4)))
-ggplot(nb, metric = "Accuracy")
-
-# show confusion matrix
-pr <- predict(nb, test %>% select(-count), type = "prob")
-confusionMatrix(ifelse(pr$Yes > 0.5, "Yes", "No"), test$count)
-
-# variable importance
-VarImp <- varImp(nb)
-VarImp
-plot(VarImp, top = 20)
-
-# clean up
-rm(pr, VarImp)
+# calculate RMSE
+RMSE(mean(train$count), test$count)
 
 
 
@@ -193,10 +211,11 @@ rm(pr, VarImp)
 # train model (random search 20x)
 set.seed(12345)
 mars <- train(count ~ ., data = train,
-            method = "earth", metric = "Accuracy",
-            trControl = trainControl(method = "cv", number = 5, search = "random"),
-            tuneLength = 20)
+              method = "earth", metric = "RMSE",
+              trControl = trainControl(method = "cv", number = 5, search = "random"),
+              tuneLength = 20)
 mars
+
 print(paste0("Maximum Accuracy: ", round(max(mars$results$Accuracy), 4)))
 ggplot(mars$results, aes(x = nprune, y = Accuracy, colour = degree)) + 
   geom_point()
